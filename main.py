@@ -16,9 +16,43 @@ enemy_path = os.path.join(img, "enemy")
 
 player_idle_path = os.path.join(player_path, "Idle")
 player_run_path = os.path.join(player_path, "Run")
+player_jump_path = os.path.join(player_path, "Jump")
 
 enemy_idle_path = os.path.join(enemy_path, "Idle")
 enemy_run_path = os.path.join(enemy_path, "Run")
+enemy_jump_path = os.path.join(enemy_path, "Jump")
+
+# Game variables
+GRAVITY = 1
+FPS = 60
+
+BG = (144, 201, 120)
+BLACK = (0, 0, 0)
+
+# Screen and clock info
+SCREEN_WIDTH = 800
+SCREEN_HEIGHT = int(0.8 * SCREEN_WIDTH)
+
+GROUND = 400
+
+x = 200
+y = GROUND
+
+scale = 2.5
+
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+pygame.display.set_caption("Sidescroller")
+
+clock = pygame.Clock()
+
+# Soldier speeds
+SPEED = 10
+JUMPING_SPEED = 20
+
+def draw_background(screen):
+    screen.fill(BG)
+    pygame.draw.line(screen, BLACK, (0, GROUND), (SCREEN_WIDTH, GROUND))
+
 
 class State(Enum):
     IDLE = 0
@@ -32,6 +66,7 @@ class Soldier(pygame.sprite.Sprite):
 
     def __init__(self, char_type, x, y, scale, speed):
         pygame.sprite.Sprite.__init__(self)
+        self.alive = True
 
         self.char_type = char_type
 
@@ -40,12 +75,13 @@ class Soldier(pygame.sprite.Sprite):
         self.animation_list = []
         self.animation_list.append(self._load_frames(State.IDLE, scale)) # State 0
         self.animation_list.append(self._load_frames(State.RUN, scale)) # State 1
+        self.animation_list.append(self._load_frames(State.JUMP, scale)) # State 2
 
         self.frame_index = 0
         self.image = self.animation_list[State.IDLE.value][self.frame_index]
 
         self.rect = self.image.get_rect()
-        self.rect.center = (x, y)
+        self.rect.midbottom = (x, y)
 
         self.state = State.IDLE
         self.flip = False
@@ -53,7 +89,11 @@ class Soldier(pygame.sprite.Sprite):
         self.moving_right = False
         self.moving_left = False
 
+        self.jumping = False
+        self.jumping_animation = False
+
         self.speed = speed
+        self.vel_y = 0
 
         Soldier.soldier_list.append(self)
 
@@ -84,14 +124,40 @@ class Soldier(pygame.sprite.Sprite):
 
     def move(self):
         # Update position
-        if self.moving_right: self.rect.x += self.speed
-        elif self.moving_left: self.rect.x -= self.speed
+        dx = 0
+        dy = 0
+
+        # Left/right movement
+        if self.moving_right: dx += self.speed
+        elif self.moving_left: dx -= self.speed
+
+        # Jumping movement
+        if self.jumping: self.vel_y = -self.speed # Initial jumping velocity
+
+        # Gravity
+        self.vel_y += GRAVITY
+        if (self.vel_y > self.speed): self.vel_y = self.speed  # Terminal falling velocity
+        dy += self.vel_y
+
+        if self.rect.bottom + dy >= GROUND: # Collision with ground
+            dy = GROUND - self.rect.bottom
+            self.vel_y = 0
+            self.jumping_animation = False
+        
+        # Final change of x,y pos
+        self.rect.x += dx
+        self.rect.y += dy
 
         # Update state
-        if self.moving_left or self.moving_right: 
+        if (self.moving_left or self.moving_right): 
             self.update_animation(State.RUN)
         elif not (self.moving_left or self.moving_right):
             self.update_animation(State.IDLE)
+
+        if self.jumping_animation:
+            self.update_animation(State.JUMP)
+            self.jumping = False
+
 
     def update_animation(self, new_state):
         if self.state != new_state:
@@ -111,9 +177,11 @@ class Soldier(pygame.sprite.Sprite):
         # Get path
         if state == State.IDLE and self.char_type == "player": path = player_idle_path
         elif state == State.RUN and self.char_type == "player": path = player_run_path
+        elif state == State.JUMP and self.char_type == "player": path = player_jump_path
 
         elif state == State.IDLE and self.char_type == "enemy": path = enemy_idle_path
         elif state == State.RUN and self.char_type == "enemy": path = enemy_run_path 
+        elif state == State.JUMP and self.char_type == "enemy": path = enemy_jump_path
 
         # Get file count
         frame_count = self._file_count(path)
@@ -128,24 +196,7 @@ class Soldier(pygame.sprite.Sprite):
         return frame_list
 
 
-# Screen and clock info
-SCREEN_WIDTH = 800
-SCREEN_HEIGHT = int(0.8 * SCREEN_WIDTH)
-
-x = 200
-y = 400
-
-scale = 2.5
-
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-pygame.display.set_caption("Sidescroller")
-
-clock = pygame.Clock()
-FPS = 60
-
 # Soldiers
-SPEED = 10
-
 Player1 = Soldier("player", x, y, scale, SPEED)
 Player2 = Soldier("enemy", x + 100, y, scale, SPEED)
 
@@ -157,20 +208,23 @@ while True:
             exit()
 
         if event.type == pygame.KEYDOWN:
-            if (event.key == pygame.K_d):
+            if event.key == pygame.K_d:
                 Player1.moving_right = True
-            if (event.key == pygame.K_a):
+            if event.key == pygame.K_a:
                 Player1.moving_left = True
+            if event.key == pygame.K_SPACE:
+                Player1.jumping = True
+                Player1.jumping_animation = True
 
         if event.type == pygame.KEYUP:
-            if (event.key == pygame.K_d):
+            if event.key == pygame.K_d:
                 Player1.moving_right = False
-            if (event.key == pygame.K_a):
+            if event.key == pygame.K_a:
                 Player1.moving_left = False
 
-    screen.fill((0, 0, 0))
+    draw_background(screen)
     
-    Player1.move()
+    if Player1.alive: Player1.move()
 
     Player1.draw(screen)
     Player2.draw(screen)
