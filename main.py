@@ -17,10 +17,14 @@ enemy_path = os.path.join(img, "enemy")
 player_idle_path = os.path.join(player_path, "Idle")
 player_run_path = os.path.join(player_path, "Run")
 player_jump_path = os.path.join(player_path, "Jump")
+player_death_path = os.path.join(player_path, "Death")
 
 enemy_idle_path = os.path.join(enemy_path, "Idle")
 enemy_run_path = os.path.join(enemy_path, "Run")
 enemy_jump_path = os.path.join(enemy_path, "Jump")
+enemy_death_path = os.path.join(enemy_path, "Death")
+
+icon_path = os.path.join(img, "icons")
 
 # Game variables
 GRAVITY = 1
@@ -45,9 +49,14 @@ pygame.display.set_caption("Sidescroller")
 
 clock = pygame.Clock()
 
-# Soldier speeds
+# Speeds
 SPEED = 10
-JUMPING_SPEED = 20
+BULLET_SPEED = 5
+
+# Groups
+bullet_group = pygame.sprite.Group()
+enemy_group = pygame.sprite.Group()
+
 
 def draw_background(screen):
     screen.fill(BG)
@@ -61,21 +70,58 @@ class State(Enum):
     DEATH = 3
 
 
-class Soldier(pygame.sprite.Sprite):
-    soldier_list = []
+class Bullet(pygame.sprite.Sprite):
+    def __init__(self, x, y, moving_right, speed):
+        pygame.sprite.Sprite.__init__(self)
 
+        self.image = pygame.image.load(os.path.join(icon_path, "bullet.png")).convert_alpha()
+        self.rect = self.image.get_rect()
+
+        self.rect.center = (x, y)
+        self.flip = not moving_right
+
+        self.speed = speed
+
+    def draw(self, screen):
+        screen.blit(self.image, self.rect)
+
+    def update(self):
+        dx = 0
+        dx += self.speed if not self.flip else -self.speed
+
+        enemies_collided = pygame.sprite.spritecollide(self, enemy_group, False)
+
+        for enemy in enemies_collided:
+            if enemy.is_alive:
+                self.kill()
+                enemy.health -= 25
+
+        if self.rect.left > SCREEN_WIDTH or self.rect.right < 0:
+            self.kill()
+
+        self.rect.x += dx
+
+
+class Soldier(pygame.sprite.Sprite):
     def __init__(self, char_type, x, y, scale, speed):
         pygame.sprite.Sprite.__init__(self)
-        self.alive = True
+
+        self.is_alive = True
+        self.dying = False
+
+        self.health = 100
+        self.max_health = self.health
 
         self.char_type = char_type
 
         self.update_time = pygame.time.get_ticks()
+        self.shoot_time = pygame.time.get_ticks()
 
         self.animation_list = []
         self.animation_list.append(self._load_frames(State.IDLE, scale)) # State 0
         self.animation_list.append(self._load_frames(State.RUN, scale)) # State 1
         self.animation_list.append(self._load_frames(State.JUMP, scale)) # State 2
+        self.animation_list.append(self._load_frames(State.DEATH, scale)) # State 3
 
         self.frame_index = 0
         self.image = self.animation_list[State.IDLE.value][self.frame_index]
@@ -88,29 +134,44 @@ class Soldier(pygame.sprite.Sprite):
 
         self.moving_right = False
         self.moving_left = False
+        self.moving_down = False
 
         self.jumping = False
-        self.jumping_animation = False
+        self.in_air = False
 
         self.speed = speed
         self.vel_y = 0
 
-        Soldier.soldier_list.append(self)
+    def shoot(self):
+        SHOOTING_COOLDOWN = 200
+
+        if pygame.time.get_ticks() - self.shoot_time >= SHOOTING_COOLDOWN:
+            gun_pos_x = self.rect.right + 10 if not self.flip else self.rect.left - 10
+
+            bullet = Bullet(gun_pos_x, self.rect.centery, not self.flip, BULLET_SPEED)
+            bullet_group.add(bullet)
+
+            self.shoot_time = pygame.time.get_ticks()
 
     def draw(self, screen):
         ANIMATION_COOLDOWN = 100
 
         # If enough time has passed between last animation frame
         if pygame.time.get_ticks() - self.update_time >= ANIMATION_COOLDOWN:
-            frame_count = 0
             frame_count = len(self.animation_list[self.state.value])
 
             # Reset frame index at end of cycle
             if self.frame_index < frame_count - 1: self.frame_index += 1
-            else: self.frame_index = 0
+            else:
+                if self.dying: self.dying = False 
+
+                if not self.is_alive and not self.dying: self.frame_index = frame_count - 1
+                else: self.frame_index = 0
 
             # Update image
             self.image = self.animation_list[self.state.value][self.frame_index]
+
+            self.update_time = pygame.time.get_ticks()
 
             # Flip sprite in case of moving in opposite direction
             if self.moving_left: self.flip = True
@@ -118,11 +179,13 @@ class Soldier(pygame.sprite.Sprite):
 
             self.image = pygame.transform.flip(self.image, self.flip, False)
 
-            self.update_time = pygame.time.get_ticks()
-
         screen.blit(self.image, self.rect)
 
-    def move(self):
+    def update(self):
+        if self.health <= 0 and self.is_alive: 
+            self.is_alive = False
+            self.dying = True
+
         # Update position
         dx = 0
         dy = 0
@@ -132,38 +195,42 @@ class Soldier(pygame.sprite.Sprite):
         elif self.moving_left: dx -= self.speed
 
         # Jumping movement
-        if self.jumping: self.vel_y = -self.speed # Initial jumping velocity
+        if self.jumping: self.vel_y = -self.speed * 2 # Initial jumping velocity
 
         # Gravity
         self.vel_y += GRAVITY
-        if (self.vel_y > self.speed): self.vel_y = self.speed  # Terminal falling velocity
+        if self.moving_down: self.vel_y += 0.25 * self.speed # Sort of like a stomp
+
         dy += self.vel_y
 
         if self.rect.bottom + dy >= GROUND: # Collision with ground
             dy = GROUND - self.rect.bottom
             self.vel_y = 0
-            self.jumping_animation = False
+            self.in_air = False
         
         # Final change of x,y pos
         self.rect.x += dx
         self.rect.y += dy
 
         # Update state
-        if (self.moving_left or self.moving_right): 
-            self.update_animation(State.RUN)
-        elif not (self.moving_left or self.moving_right):
-            self.update_animation(State.IDLE)
+        if not self.is_alive:
+            self.update_animation(State.DEATH)
+        else:
+            if (self.moving_left or self.moving_right):
+                self.update_animation(State.RUN)
+            elif not (self.moving_left or self.moving_right):
+                self.update_animation(State.IDLE)
 
-        if self.jumping_animation:
-            self.update_animation(State.JUMP)
-            self.jumping = False
+            if self.in_air:
+                self.update_animation(State.JUMP)
+                self.jumping = False
 
 
     def update_animation(self, new_state):
         if self.state != new_state:
             self.state = new_state
             self.frame_index = 0
-            self.update = pygame.time.get_ticks()
+            self.update_time = pygame.time.get_ticks()
 
     # Get total files in path directory
     def _file_count(self, path):
@@ -178,10 +245,12 @@ class Soldier(pygame.sprite.Sprite):
         if state == State.IDLE and self.char_type == "player": path = player_idle_path
         elif state == State.RUN and self.char_type == "player": path = player_run_path
         elif state == State.JUMP and self.char_type == "player": path = player_jump_path
+        elif state == State.DEATH and self.char_type == "player": path = player_death_path
 
         elif state == State.IDLE and self.char_type == "enemy": path = enemy_idle_path
         elif state == State.RUN and self.char_type == "enemy": path = enemy_run_path 
         elif state == State.JUMP and self.char_type == "enemy": path = enemy_jump_path
+        elif state == State.DEATH and self.char_type == "enemy": path = enemy_death_path
 
         # Get file count
         frame_count = self._file_count(path)
@@ -200,6 +269,8 @@ class Soldier(pygame.sprite.Sprite):
 Player1 = Soldier("player", x, y, scale, SPEED)
 Player2 = Soldier("enemy", x + 100, y, scale, SPEED)
 
+enemy_group.add(Player2)
+
 # Game loop
 while True:
     for event in pygame.event.get():
@@ -212,9 +283,18 @@ while True:
                 Player1.moving_right = True
             if event.key == pygame.K_a:
                 Player1.moving_left = True
+
+            if event.key == pygame.K_s:
+                if Player1.in_air:
+                    Player1.moving_down = True
+
             if event.key == pygame.K_SPACE:
-                Player1.jumping = True
-                Player1.jumping_animation = True
+                if not Player1.in_air:
+                    Player1.jumping = True
+                    Player1.in_air = True
+
+            if event.key == pygame.K_l:
+                Player1.shoot()
 
         if event.type == pygame.KEYUP:
             if event.key == pygame.K_d:
@@ -222,13 +302,20 @@ while True:
             if event.key == pygame.K_a:
                 Player1.moving_left = False
 
-    draw_background(screen)
-    
-    if Player1.alive: Player1.move()
+            if event.key == pygame.K_s:
+                Player1.moving_down = False
 
+    draw_background(screen)
+
+    # Update entities
+    Player1.update()
+    bullet_group.update()
+    Player2.update()
+
+    # Draw them on screen
     Player1.draw(screen)
     Player2.draw(screen)
+    bullet_group.draw(screen)
 
     pygame.display.flip()
-
     clock.tick(FPS)
