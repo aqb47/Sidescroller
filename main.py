@@ -25,6 +25,7 @@ enemy_jump_path = os.path.join(enemy_path, "Jump")
 enemy_death_path = os.path.join(enemy_path, "Death")
 
 icon_path = os.path.join(img, "icons")
+explosion_path = os.path.join(img, "explosion")
 
 # Game variables
 GRAVITY = 1
@@ -52,22 +53,111 @@ clock = pygame.Clock()
 # Speeds
 SPEED = 10
 BULLET_SPEED = 5
+GRENADE_SPEED = 8
+
+# Damages
+BULLET_DAMAGE = 25
+GRENADE_DAMAGE = 100
 
 # Groups
 bullet_group = pygame.sprite.Group()
 enemy_group = pygame.sprite.Group()
+grenade_group = pygame.sprite.Group()
 
 
 def draw_background(screen):
     screen.fill(BG)
     pygame.draw.line(screen, BLACK, (0, GROUND), (SCREEN_WIDTH, GROUND))
 
+# Get total files in path directory
+def file_count(path):
+    return sum(1 for file in os.listdir(path) if os.path.isfile(os.path.join(path, file)))
 
-class State(Enum):
+
+class SoldierState(Enum):
     IDLE = 0
     RUN = 1
     JUMP = 2
     DEATH = 3
+
+
+class Grenade(pygame.sprite.Sprite):
+    animation_list = []
+    loaded = False
+
+    def __init__(self, x, y, moving_right, speed):
+        pygame.sprite.Sprite.__init__(self)
+
+        self.explode = False
+
+        if not Grenade.loaded:
+            Grenade.animation_list = self._load_frames()
+            Grenade.loaded = True
+
+        self.frame_index = 0
+
+        self.image = pygame.image.load(os.path.join(icon_path, "grenade.png")).convert_alpha()
+
+        self.rect = self.image.get_rect()
+        self.rect.center = (x, y)
+
+        self.draw_time = pygame.time.get_ticks()
+
+        self.flip = not moving_right
+
+        self.speed = speed
+        self.vel_y = -self.speed * 2
+
+    def _load_frames(self):
+        frame_list = []
+        path = explosion_path
+
+        frame_count = file_count(path)
+
+        for i in range(frame_count):
+            image = pygame.image.load(os.path.join(path, f"{i}.png")).convert_alpha()
+            frame_list.append(image)
+
+        return frame_list
+
+
+    def draw(self, screen):
+        ANIMATION_COOLDOWN = 100
+
+        if self.explode:
+            if self.frame_index < len(Grenade.animation_list):
+                if pygame.time.get_ticks() - self.draw_time >= ANIMATION_COOLDOWN:
+                    self.image = Grenade.animation_list[self.frame_index]
+                    self.frame_index += 1
+
+                    self.draw_time = pygame.time.get_ticks()
+            else:
+                self.kill()
+
+        screen.blit(self.image, self.rect)
+
+    def update(self):
+        if not self.explode:
+            dx = 0
+            dy = 0
+
+            dx += self.speed if not self.flip else -self.speed
+            dy += self.vel_y
+
+            self.vel_y += GRAVITY
+
+            if self.rect.top + dy > GROUND:
+                self.explode = True
+
+            else:
+                self.rect.x += dx
+                self.rect.y += dy
+
+            enemies_collided = pygame.sprite.spritecollide(self, enemy_group, False)
+            for enemy in enemies_collided:
+                if enemy.is_alive:
+                    self.explode = True
+                    enemy.health -= GRENADE_DAMAGE
 
 
 class Bullet(pygame.sprite.Sprite):
@@ -89,17 +179,17 @@ class Bullet(pygame.sprite.Sprite):
         dx = 0
         dx += self.speed if not self.flip else -self.speed
 
+        if self.rect.left > SCREEN_WIDTH or self.rect.right < 0:
+            self.kill()
+
+        self.rect.x += dx
+
         enemies_collided = pygame.sprite.spritecollide(self, enemy_group, False)
 
         for enemy in enemies_collided:
             if enemy.is_alive:
                 self.kill()
-                enemy.health -= 25
-
-        if self.rect.left > SCREEN_WIDTH or self.rect.right < 0:
-            self.kill()
-
-        self.rect.x += dx
+                enemy.health -= BULLET_DAMAGE
 
 
 class Soldier(pygame.sprite.Sprite):
@@ -118,18 +208,20 @@ class Soldier(pygame.sprite.Sprite):
         self.shoot_time = pygame.time.get_ticks()
 
         self.animation_list = []
-        self.animation_list.append(self._load_frames(State.IDLE, scale)) # State 0
-        self.animation_list.append(self._load_frames(State.RUN, scale)) # State 1
-        self.animation_list.append(self._load_frames(State.JUMP, scale)) # State 2
-        self.animation_list.append(self._load_frames(State.DEATH, scale)) # State 3
+
+        self.animation_list.append(self._load_frames(SoldierState.IDLE, scale))
+        self.animation_list.append(self._load_frames(SoldierState.RUN, scale))
+        self.animation_list.append(self._load_frames(SoldierState.JUMP, scale))
+        self.animation_list.append(self._load_frames(SoldierState.DEATH, scale))
 
         self.frame_index = 0
-        self.image = self.animation_list[State.IDLE.value][self.frame_index]
+
+        self.image = self.animation_list[SoldierState.IDLE.value][self.frame_index]
 
         self.rect = self.image.get_rect()
         self.rect.midbottom = (x, y)
 
-        self.state = State.IDLE
+        self.state = SoldierState.IDLE
         self.flip = False
 
         self.moving_right = False
@@ -141,6 +233,14 @@ class Soldier(pygame.sprite.Sprite):
 
         self.speed = speed
         self.vel_y = 0
+
+    def throw_grenade(self):
+        grenade_pos_x = self.rect.topright[0] + 10 if not self.flip else self.rect.topleft[0] - 10
+        grenade_pos_y = self.rect.topright[1] + 10
+
+        grenade = Grenade(grenade_pos_x, grenade_pos_y, not self.flip, GRENADE_SPEED)
+        grenade_group.add(grenade)
+
 
     def shoot(self):
         SHOOTING_COOLDOWN = 200
@@ -173,11 +273,7 @@ class Soldier(pygame.sprite.Sprite):
 
             self.update_time = pygame.time.get_ticks()
 
-            # Flip sprite in case of moving in opposite direction
-            if self.moving_left: self.flip = True
-            elif self.moving_right: self.flip = False
-
-            self.image = pygame.transform.flip(self.image, self.flip, False)
+        self.image = pygame.transform.flip(self.animation_list[self.state.value][self.frame_index], self.flip, False)
 
         screen.blit(self.image, self.rect)
 
@@ -194,8 +290,13 @@ class Soldier(pygame.sprite.Sprite):
         if self.moving_right: dx += self.speed
         elif self.moving_left: dx -= self.speed
 
+        if self.moving_left: self.flip = True
+        elif self.moving_right: self.flip = False
+
         # Jumping movement
-        if self.jumping: self.vel_y = -self.speed * 2 # Initial jumping velocity
+        if self.jumping:
+            self.vel_y = -self.speed * 2 # Initial jumping velocity
+            self.jumping = False
 
         # Gravity
         self.vel_y += GRAVITY
@@ -214,16 +315,14 @@ class Soldier(pygame.sprite.Sprite):
 
         # Update state
         if not self.is_alive:
-            self.update_animation(State.DEATH)
+            self.update_animation(SoldierState.DEATH)
+        elif self.in_air:
+            self.update_animation(SoldierState.JUMP)
         else:
             if (self.moving_left or self.moving_right):
-                self.update_animation(State.RUN)
-            elif not (self.moving_left or self.moving_right):
-                self.update_animation(State.IDLE)
-
-            if self.in_air:
-                self.update_animation(State.JUMP)
-                self.jumping = False
+                self.update_animation(SoldierState.RUN)
+            else:
+                self.update_animation(SoldierState.IDLE)
 
 
     def update_animation(self, new_state):
@@ -231,10 +330,7 @@ class Soldier(pygame.sprite.Sprite):
             self.state = new_state
             self.frame_index = 0
             self.update_time = pygame.time.get_ticks()
-
-    # Get total files in path directory
-    def _file_count(self, path):
-        return sum(1 for file in os.listdir(path) if os.path.isfile(os.path.join(path, file)))
+            self.image = self.animation_list[self.state.value][self.frame_index]
 
     # Load files depending on state and player type
     def _load_frames(self, state, scale):
@@ -242,18 +338,18 @@ class Soldier(pygame.sprite.Sprite):
         path = ""
 
         # Get path
-        if state == State.IDLE and self.char_type == "player": path = player_idle_path
-        elif state == State.RUN and self.char_type == "player": path = player_run_path
-        elif state == State.JUMP and self.char_type == "player": path = player_jump_path
-        elif state == State.DEATH and self.char_type == "player": path = player_death_path
+        if state == SoldierState.IDLE and self.char_type == "player": path = player_idle_path
+        elif state == SoldierState.RUN and self.char_type == "player": path = player_run_path
+        elif state == SoldierState.JUMP and self.char_type == "player": path = player_jump_path
+        elif state == SoldierState.DEATH and self.char_type == "player": path = player_death_path
 
-        elif state == State.IDLE and self.char_type == "enemy": path = enemy_idle_path
-        elif state == State.RUN and self.char_type == "enemy": path = enemy_run_path 
-        elif state == State.JUMP and self.char_type == "enemy": path = enemy_jump_path
-        elif state == State.DEATH and self.char_type == "enemy": path = enemy_death_path
+        elif state == SoldierState.IDLE and self.char_type == "enemy": path = enemy_idle_path
+        elif state == SoldierState.RUN and self.char_type == "enemy": path = enemy_run_path 
+        elif state == SoldierState.JUMP and self.char_type == "enemy": path = enemy_jump_path
+        elif state == SoldierState.DEATH and self.char_type == "enemy": path = enemy_death_path
 
         # Get file count
-        frame_count = self._file_count(path)
+        frame_count = file_count(path)
 
         # Go through each image (file) in path directory and add it to list
         for i in range(frame_count):
@@ -267,9 +363,12 @@ class Soldier(pygame.sprite.Sprite):
 
 # Soldiers
 Player1 = Soldier("player", x, y, scale, SPEED)
+
 Player2 = Soldier("enemy", x + 100, y, scale, SPEED)
+Player3 = Soldier("enemy", x + 200, y, scale, SPEED)
 
 enemy_group.add(Player2)
+enemy_group.add(Player3)
 
 # Game loop
 while True:
@@ -293,8 +392,10 @@ while True:
                     Player1.jumping = True
                     Player1.in_air = True
 
-            if event.key == pygame.K_l:
+            if event.key == pygame.K_e:
                 Player1.shoot()
+            if event.key == pygame.K_q:
+                Player1.throw_grenade()
 
         if event.type == pygame.KEYUP:
             if event.key == pygame.K_d:
@@ -309,13 +410,25 @@ while True:
 
     # Update entities
     Player1.update()
-    bullet_group.update()
     Player2.update()
+    Player3.update()
+
+    for bullet in bullet_group:
+        bullet.update()
+
+    for grenade in grenade_group:
+        grenade.update()
 
     # Draw them on screen
     Player1.draw(screen)
     Player2.draw(screen)
-    bullet_group.draw(screen)
+    Player3.draw(screen)
+
+    for bullet in bullet_group:
+        bullet.draw(screen)
+
+    for grenade in grenade_group:
+        grenade.draw(screen)
 
     pygame.display.flip()
     clock.tick(FPS)
