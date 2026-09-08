@@ -1,0 +1,1 @@
+"""Sidescroller game package."""
